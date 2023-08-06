@@ -1,8 +1,9 @@
 #include <mod/amlmod.h>
 #include <mod/logger.h>
+#include <time.h>
 #include "GTASA_STRUCTS.h"
 
-MYMOD(net.juniordjjr.rusjj.male01, FixMALE01, 1.0, JuniorDjjr & RusJJ)
+MYMOD(net.juniordjjr.rusjj.male01, FixMALE01, 1.1, JuniorDjjr & RusJJ)
 BEGIN_DEPLIST()
     ADD_DEPENDENCY_VER(net.rusjj.aml, 1.0.2.2)
 END_DEPLIST()
@@ -13,6 +14,7 @@ void* hGTASA;
 bool (*PedStreamedInForThisGang)(int);
 bool (*PickStreamedInPedForThisGang)(int, int*);
 int (*PickPedMIToStreamInForCurrentZone)();
+int (*GetDefaultCabDriverModel)();
 void (*RequestModel)(int, int);
 void (*LoadAllRequestedModels)(bool);
 void (*SetModelIsDeletable)(int);
@@ -22,47 +24,59 @@ uint16_t **m_PedGroups;
 tPedGroupTranslationData* m_TranslationArray;
 uint32_t *CurrentWorldZone;
 
-
-
-int LoadSomePedModel(int gangId, bool loadNow)
+inline int GetRand(int min, int max)
 {
-    int model = MODEL_MALE01;
-    if (gangId >= 0)
-    {
-        if (PedStreamedInForThisGang(gangId)) // any ped loaded for this gang
-        {
-            if (PickStreamedInPedForThisGang(gangId, &model))
-            {
-                return model;
-            }
-        }
-        model = m_PedGroups[m_TranslationArray[gangId + 18].pedGroupIds[0]][0];
-    }
-    else
-    {
-        CPedModelInfo *modelInfo;
-        int tries = 0;
-        do
-        {
-            tries++;
-            if (tries > 30)
-            {
-                model = MODEL_MALE01;
-                break;
-            }
-            model = PickPedMIToStreamInForCurrentZone();
-            modelInfo = (CPedModelInfo *)ms_modelInfoPtrs[model];
-            if (!modelInfo) continue;
-        }
-        while (
-            !modelInfo ||
-            (modelInfo->m_defaultPedStats >= 4  && modelInfo->m_defaultPedStats <= 13) ||
-            (modelInfo->m_defaultPedStats <= 26 && modelInfo->m_defaultPedStats <= 32) ||
-            (modelInfo->m_defaultPedStats <= 38 && modelInfo->m_defaultPedStats <= 41)
-        );
-    }
+    srand(time(NULL));
+    return (rand() % (max - min + 1)) + min;
+}
+inline int GetRand01()
+{
+    srand(time(NULL));
+    return rand() % 2;
+}
 
-    if (model <= 0) model = MODEL_MALE01;
+inline int LoadSomePedModel(int gangId, bool loadNow, int forcedModel = MODEL_MALE01)
+{
+    int model = forcedModel;
+    
+    if(model == MODEL_MALE01)
+    {
+        if (gangId >= 0)
+        {
+            if (PedStreamedInForThisGang(gangId)) // any ped loaded for this gang
+            {
+                if (PickStreamedInPedForThisGang(gangId, &model))
+                {
+                    return model;
+                }
+            }
+            model = m_PedGroups[m_TranslationArray[gangId + 18].pedGroupIds[0]][0];
+        }
+        else
+        {
+            CPedModelInfo *modelInfo;
+            int tries = 0;
+            do
+            {
+                tries++;
+                if (tries > 30)
+                {
+                    model = MODEL_MALE01;
+                    break;
+                }
+                model = PickPedMIToStreamInForCurrentZone();
+                modelInfo = (CPedModelInfo *)ms_modelInfoPtrs[model];
+                if (!modelInfo) continue;
+            }
+            while (
+                !modelInfo ||
+                (modelInfo->m_defaultPedStats >= 4  && modelInfo->m_defaultPedStats <= 13) ||
+                (modelInfo->m_defaultPedStats <= 26 && modelInfo->m_defaultPedStats <= 32) ||
+                (modelInfo->m_defaultPedStats <= 38 && modelInfo->m_defaultPedStats <= 41)
+            );
+        }
+        if (model <= 0) model = MODEL_MALE01;
+    }
 
     if (loadNow && model != MODEL_MALE01)
     {
@@ -71,7 +85,7 @@ int LoadSomePedModel(int gangId, bool loadNow)
         SetModelIsDeletable(model);
         //SetModelTxdIsDeletable(model); // Empty on Android <- all textures are always loaded?
     }
-    logger->Info("At the end it's %d!", model);
+    //logger->Info("At the end it's %d!", model);
     return model;
 }
 
@@ -87,7 +101,38 @@ DECL_HOOK(int, ChooseCivilianOccupation, bool a1, bool a2, int a3, int a4, int a
 DECL_HOOK(int, ChooseCivilianOccupationForVehicle, bool a1, CVehicle* a2)
 {
     int model = ChooseCivilianOccupationForVehicle(a1, a2);
-    if(model == MODEL_MALE01) return LoadSomePedModel(-1, true);
+    if(model == MODEL_MALE01)
+    {
+        auto mdlIdx = a2->m_nModelIndex;
+        switch(mdlIdx)
+        {
+            case 537:
+            case 538:
+            case 570: return LoadSomePedModel(-1, true, 253);
+
+            case 463: return LoadSomePedModel(-1, true, 247 + GetRand01());
+
+            default:
+            {
+                auto mi = (CVehicleModelInfo*)ms_modelInfoPtrs[mdlIdx];
+                if(!mi) return LoadSomePedModel(-1, true);
+
+                switch(mi->m_nVehicleClass)
+                {
+                    case VEHICLE_CLASS_TAXI: return LoadSomePedModel(-1, true, GetDefaultCabDriverModel());
+
+                    case VEHICLE_CLASS_WORKER:
+                    case VEHICLE_CLASS_WORKERBOAT:
+                    {
+                        if(mdlIdx == 422 || mdlIdx == 478 || mdlIdx == 508) return LoadSomePedModel(-1, true);
+                        return LoadSomePedModel(-1, true, 50);
+                    }
+
+                    default: return LoadSomePedModel(-1, true);
+                }
+            }
+        }
+    }
     return model;
 }
 
@@ -101,6 +146,7 @@ extern "C" void OnModLoad()
     SET_TO(PedStreamedInForThisGang, aml->GetSym(hGTASA, "_ZN9CGangWars24PedStreamedInForThisGangEi"));
     SET_TO(PickStreamedInPedForThisGang, aml->GetSym(hGTASA, "_ZN9CGangWars28PickStreamedInPedForThisGangEiPi"));
     SET_TO(PickPedMIToStreamInForCurrentZone, aml->GetSym(hGTASA, "_ZN9CPopCycle33PickPedMIToStreamInForCurrentZoneEv"));
+    SET_TO(GetDefaultCabDriverModel, aml->GetSym(hGTASA, "_ZN10CStreaming24GetDefaultCabDriverModelEv"));
     SET_TO(RequestModel, aml->GetSym(hGTASA, "_ZN10CStreaming12RequestModelEii"));
     SET_TO(LoadAllRequestedModels, aml->GetSym(hGTASA, "_ZN10CStreaming22LoadAllRequestedModelsEb"));
     SET_TO(SetModelIsDeletable, aml->GetSym(hGTASA, "_ZN10CStreaming19SetModelIsDeletableEi"));
